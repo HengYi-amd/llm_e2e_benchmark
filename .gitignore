@@ -1,0 +1,20 @@
+# Results, caches and weights stay out of the repository. The repo is the
+# method; the numbers belong to a particular machine and a particular run.
+artifacts/
+caches/
+models/
+logs/
+state/
+.venv-e2e/
+
+*.pyc
+__pycache__/
+*.bak
+*.bak[0-9]
+*.tgz
+
+# runtime artifact written by scripts/setup/patch_vllm.sh
+patches/vllm_force_aten_linear.json
+
+# backup of the upstream file, made by patch_vllm.sh at patch time
+patches/layers_utils.orig.py

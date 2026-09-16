@@ -1,0 +1,54 @@
+--- a/torch/_inductor/codegen/flydsl/flydsl_kernel.py
++++ b/torch/_inductor/codegen/flydsl/flydsl_kernel.py
+@@ -152,13 +152,19 @@ class FlyDSLTemplateKernel(...):
+     def call_kernel(self, name: str, node=None):
+         wrapper = V.graph.wrapper_code
+         call_args = []
+         arg_types = []
++        raw_args = []
++        raw_keys = []
+ 
+-        for _, input_node in self._template_input_args:
++        for param_name, input_node in self._template_input_args:
+             reinterpret_view = self._get_reinterpret_view(input_node)
+-            call_args.append(
+-                reinterpret_view.codegen_reference()
+-                if reinterpret_view is not None
+-                else input_node.get_name()
+-            )
++            if reinterpret_view is not None:
++                call_args.append(reinterpret_view.codegen_reference())
++                # Pass the ReinterpretView as raw_arg so autotune_at_compile_time
++                # can use it to generate example tensors: codegen_reference()
++                # yields a `reinterpret_tensor(...)` expression, not a buffer
++                # name, so try_get_buffer() cannot resolve it.
++                raw_args.append(reinterpret_view)
++            else:
++                call_args.append(input_node.get_name())
++                raw_args.append(input_node)
+             arg_types.append(V.graph.get_dtype(input_node.get_name()))
++            raw_keys.append(param_name)
+ 
+         orig_arg_defs, orig_call_args, _, orig_arg_types = self.args.python_argdefs()
+         for arg_def, call_arg, arg_type in zip(
+             orig_arg_defs, orig_call_args, orig_arg_types
+         ):
+             if arg_def.full_name() in self._seen_input_args:
+                 continue
+             call_args.append(call_arg)
+             arg_types.append(arg_type)
++            # These resolve through args_to_buffers (they are plain buffer
++            # names), so no raw_arg is needed.
++            raw_args.append(None)
++            raw_keys.append(None)
+ 
+         # TODO: The `triton` argument identifies the common `.run()` calling
+         # convention and should be renamed independently of this integration.
+         wrapper.generate_kernel_call(
+             name,
+             call_args,
+             triton=True,
+             arg_types=arg_types,
++            raw_keys=raw_keys,
++            raw_args=raw_args,
+         )
