@@ -127,6 +127,13 @@ def workload_footnote(d, ctx, arms, extra=""):
     A speedup without its workload is not a result: the batch width, the prefill
     chunk width and the search space each move the number more than the kernel
     under test does.
+
+    Only settings a reader would misread the chart without are listed. Outputs
+    are fixed-length because the client passes --ignore-eos, which is what makes
+    the arms comparable: with natural stopping the decode step count would track
+    how much the model chose to say. The seed is a reproducibility detail that
+    changes no bar, so it stays in each point's provenance JSON and in the
+    published raw_points.csv rather than on the chart.
     """
     t = d.iloc[0]
     return (
@@ -134,9 +141,9 @@ def workload_footnote(d, ctx, arms, extra=""):
         f"Treatment: {arms[1]} = {ctx['backends'][1]}   |   "
         f"torch.compile max-autotune, "
         f"origami={ctx['origami']}/top{ctx['origami_topk']}\n"
-        f"vllm bench serve, TP={ctx['tp']}, ISL={int(t.isl)} / OSL={int(t.osl)}, "
-        f"max_num_batched_tokens={ctx['chunk']}, "
-        f"prefix caching off, ignore_eos, seed 0\n"
+        f"vllm bench serve, TP={ctx['tp']}, "
+        f"ISL={int(t.isl)} / OSL={int(t.osl)} (fixed-length outputs), "
+        f"max_num_batched_tokens={ctx['chunk']}, prefix caching off\n"
         + extra.lstrip("; ")
     )
 

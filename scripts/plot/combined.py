@@ -108,8 +108,8 @@ def one_figure(agg, raw, metric, name, phase, out_dir):
                  fontsize=12, loc="center", pad=34)
     foot = (f"Baseline: ATEN+TRITON  |  Treatment: ATEN+TRITON+FLYDSL  |  "
             f"torch.compile, max-autotune  |  TP=1\n"
-            f"vllm bench serve, ISL={isl} / OSL={osl}, "
-            f"max_num_batched_tokens={chunk}, prefix caching off, ignore_eos, seed 0  |  "
+            f"vllm bench serve, ISL={isl} / OSL={osl} (fixed-length outputs), "
+            f"max_num_batched_tokens={chunk}, prefix caching off  |  "
             f"bars above zero are faster; changes within 1% are left unlabelled")
     fig.text(0.5, -0.02, foot, ha="center", va="top", fontsize=8,
              color=MUTED, linespacing=1.6)
