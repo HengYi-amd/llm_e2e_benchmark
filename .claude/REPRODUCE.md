@@ -16,6 +16,7 @@ latency and output throughput.
 
 | model | TPOT | TTFT | e2e latency | output throughput |
 |---|---|---|---|---|
+| Llama-3.1-8B-Instruct | 1.0692x | 1.0150x | 1.0623x | 1.0620x |
 | Qwen3-32B | 1.0173x | 1.0106x | 1.0169x | 1.0168x |
 | Llama-3.3-70B-Instruct | 1.0065x | 1.0026x | 1.0066x | 1.0065x |
 
@@ -25,8 +26,8 @@ collected back to back on the same card, symmetric autotune coverage, identical
 KV capacity — but the geometric means are still larger than what the data
 supports per cell.
 
-**Noise floor**: pooling all 24 replicated measurements gives a within-run
-standard deviation of **1.71%** in log space. At n=2 that is roughly the standard
+**Noise floor**: pooling all 36 replicated measurements gives a within-run
+standard deviation of **1.79%** in log space. At n=2 that is roughly the standard
 error of a single cell's ratio, so **a per-cell change under about 1.7% is one
 sigma**. By that standard only **Qwen c=64 (+5.7%)** clears the noise — its
 baseline was measured 6 times and its treatment twice, putting the effect near
@@ -125,14 +126,14 @@ you can set it.
 
 | knob | value |
 |---|---|
-| `E2E_MODELS` | `Qwen/Qwen3-32B meta-llama/Llama-3.3-70B-Instruct` |
+| `E2E_MODELS` | three dense models (8B, 32B, 70B) |
 | `E2E_DTYPES` | `bfloat16` |
 | `E2E_PROFILE_showcase` | `256:512` (ISL:OSL) |
 | `E2E_CONCURRENCY_SWEEP` | `8 16 32 64 128 256` |
 | `E2E_REPEATS` | `2` |
 | `E2E_TP` | `1` |
 | `E2E_MAX_NUM_BATCHED_TOKENS` | `2048` |
-| `E2E_MAX_MODEL_LEN` | `4096` |
+| `E2E_MAX_MODEL_LEN` | `1024` |
 | `E2E_MAX_NUM_SEQS` | `256` |
 | `E2E_GPU_MEM_UTIL` | `0.85` |
 | `E2E_AUTOTUNE_SEARCH_SPACE` | `EXHAUSTIVE` |
@@ -143,7 +144,7 @@ you can set it.
 Three of these are load-bearing and silently ruin the result if wrong:
 
 1. **`E2E_REPEATS=2`.** The pooled within-run standard deviation on this
-   workload is **1.71%** in log space, and a single arm's repeat range reached
+   workload is **1.79%** in log space, and a single arm's repeat range reached
    7.7% in one cell. With `n=1` you cannot distinguish a 2% effect from drift and
    the sign flips between runs — three cells in the published batch did exactly
    that once repeats were added. This default was once `1`, which produced a

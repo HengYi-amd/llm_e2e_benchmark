@@ -15,9 +15,22 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
-# Validated for CVD separation against the chart surface (dE 23.2 protan,
-# 30.1 normal, both >= 3:1 contrast).
-MODEL_COLORS = ["#2a78d6", "#d1603d"]
+# Bound to the model, not to its sort position: adding a model must not recolour
+# the ones already published. Anything unlisted falls through to FALLBACK_COLORS
+# in sorted order.
+# Validated all-pairs for CVD separation against both surfaces (worst deutan
+# dE 14.2, worst normal-vision dE 17.9, all >= 3:1 contrast).
+MODEL_COLORS = {
+    "Qwen3-32B": "#2a78d6",
+    "Llama-3.3-70B-Instruct": "#d1603d",
+    "Llama-3.1-8B-Instruct": "#9c4680",
+}
+FALLBACK_COLORS = ["#2a78d6", "#d1603d", "#9c4680"]
+
+
+def model_color(model_id, idx):
+    return MODEL_COLORS.get(model_id.split("/")[-1],
+                            FALLBACK_COLORS[idx % len(FALLBACK_COLORS)])
 INK, INK2, MUTED = "#0b0b0b", "#52514e", "#898781"
 GRID, AXIS, SURFACE = "#e1e0d9", "#c3c2b7", "#fcfcfb"
 
@@ -30,15 +43,24 @@ METRICS = [
 SLUG = {"TPOT": "tpot", "TTFT": "ttft",
         "end-to-end latency": "e2e_latency", "output throughput": "throughput"}
 
-# Symmetric auto-scaling wastes most of the panel when a metric's values sit
-# almost entirely on one side of zero, which is the case for TTFT. Pin the axis
-# for those so the bars fill the frame; anything unlisted keeps auto-scaling.
-YLIM = {
-    "TTFT": (-3.0, 4.0),
-    "TPOT": (-2.0, 6.0),
-    "end-to-end latency": (-2.0, 6.0),
-    "output throughput": (-2.0, 6.0),
-}
+# Axis limits follow the data. A pinned limit has to be revisited every time the
+# numbers move - it clipped a bar the last time a cell was re-measured - and a
+# symmetric limit wastes most of the panel when the values sit on one side of
+# zero. Zero is always included so bar direction stays readable.
+def data_ylim(values, min_span=1.2):
+    """Tight limits around the data, with headroom for the value labels.
+
+    Padding is asymmetric: the top carries the "+x.x%" annotations, the bottom
+    only the bars, so an equal pad would leave visible dead space underneath.
+    """
+    lo, hi = min(min(values), 0.0), max(max(values), 0.0)
+    span = max(hi - lo, min_span)
+    lo -= span * 0.06
+    hi += span * 0.12
+    step = 0.5 if (hi - lo) <= 12 else (1.0 if (hi - lo) <= 25 else 2.0)
+    import math as _m
+    return _m.floor(lo / step) * step, _m.ceil(hi / step) * step
+
 
 plt.rcParams.update({
     "figure.facecolor": SURFACE, "axes.facecolor": SURFACE,
@@ -65,7 +87,7 @@ def one_figure(agg, raw, metric, name, phase, out_dir):
         g = t[t.model_id == m].set_index("concurrency")
         vals = [((g[metric].get(c, np.nan) - 1.0) * 100.0) for c in concs]
         pos = x - 0.4 + width * (i + 0.5)
-        ax.bar(pos, vals, width=width * 0.86, color=MODEL_COLORS[i % len(MODEL_COLORS)],
+        ax.bar(pos, vals, width=width * 0.86, color=model_color(m, i),
                label=m.split("/")[-1], zorder=3)
         for xi, v in zip(pos, vals):
             if not np.isfinite(v) or abs(v) < 1.0:
@@ -78,15 +100,7 @@ def one_figure(agg, raw, metric, name, phase, out_dir):
     allv = [((t[t.model_id == m].set_index("concurrency")[metric].get(c, np.nan) - 1) * 100)
             for m in models for c in concs]
     allv = [v for v in allv if np.isfinite(v)]
-    if name in YLIM:
-        lo, hi = YLIM[name]
-        if allv and (min(allv) < lo or max(allv) > hi):
-            print(f"  warning: {name} data spans {min(allv):+.1f}..{max(allv):+.1f}%, "
-                  f"outside the pinned axis {lo}..{hi}")
-        ax.set_ylim(lo, hi)
-    else:
-        span = max(max(abs(v) for v in allv), 1.5) if allv else 1.5
-        ax.set_ylim(-span * 1.5, span * 1.5)
+    ax.set_ylim(*data_ylim(allv if allv else [0.0, 1.0]))
     ax.set_xticks(x)
     ax.set_xticklabels([str(int(c)) for c in concs])
     ax.set_xlabel("Batch Size (concurrent requests)")

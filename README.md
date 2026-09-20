@@ -178,7 +178,7 @@ from the environment. The defaults are the published recipe.
 
 | knob | default | note |
 |---|---|---|
-| `E2E_MODELS` | two dense models | dense only; MoE changes which GEMMs exist |
+| `E2E_MODELS` | three dense models | dense only; MoE changes which GEMMs exist |
 | `E2E_DTYPES` | `bfloat16` | |
 | `E2E_ARMS` | `baseline treatment` | backend lists in `E2E_BACKENDS_<arm>` |
 | `E2E_CONCURRENCY_SWEEP` | `8 16 32 64 128 256` | becomes the decode GEMM's M |
@@ -186,7 +186,7 @@ from the environment. The defaults are the published recipe.
 | `E2E_PROFILE_showcase` | `256:512` | ISL:OSL |
 | `E2E_TP` | `1` | |
 | `E2E_MAX_NUM_BATCHED_TOKENS` | `2048` | pinned, not defaulted |
-| `E2E_MAX_MODEL_LEN` | `4096` | |
+| `E2E_MAX_MODEL_LEN` | `1024` | ISL+OSL must fit; 256+512 does |
 | `E2E_GPU_MEM_UTIL` | `0.85` | with KV pinned; higher starved the compile workspace |
 | `E2E_AUTOTUNE_SEARCH_SPACE` | `EXHAUSTIVE` | applies to the candidate backend |
 | `E2E_TRITON_DEFAULT_SPACE` | `1` | keeps Triton on its default space regardless |
@@ -245,7 +245,7 @@ tokens: at that width TTFT measures scheduling, not GEMM time.
 ### Repeats
 
 `E2E_REPEATS=2` is the floor, not a nicety. Pooling every replicated measurement
-on this workload gives a within-run standard deviation of **1.71%** in log space,
+on this workload gives a within-run standard deviation of **1.79%** in log space,
 and one arm's repeat range reached **7.7%** in a single cell. A single pass
 therefore cannot distinguish a 2% effect from drift, and the sign of such an
 effect flips between runs — three cells changed sign or halved once repeats were
