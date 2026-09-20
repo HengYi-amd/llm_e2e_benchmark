@@ -245,7 +245,7 @@ tokens: at that width TTFT measures scheduling, not GEMM time.
 ### Repeats
 
 `E2E_REPEATS=2` is the floor, not a nicety. Pooling every replicated measurement
-on this workload gives a within-run standard deviation of **1.93%** in log space,
+on this workload gives a within-run standard deviation of **1.71%** in log space,
 and one arm's repeat range reached **7.7%** in a single cell. A single pass
 therefore cannot distinguish a 2% effect from drift, and the sign of such an
 effect flips between runs — three cells changed sign or halved once repeats were

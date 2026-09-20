@@ -34,10 +34,10 @@ SLUG = {"TPOT": "tpot", "TTFT": "ttft",
 # almost entirely on one side of zero, which is the case for TTFT. Pin the axis
 # for those so the bars fill the frame; anything unlisted keeps auto-scaling.
 YLIM = {
-    "TTFT": (-3.0, 10.0),
-    "TPOT": (-2.0, 4.0),
-    "end-to-end latency": (-2.0, 4.0),
-    "output throughput": (-2.0, 4.0),
+    "TTFT": (-3.0, 4.0),
+    "TPOT": (-2.0, 6.0),
+    "end-to-end latency": (-2.0, 6.0),
+    "output throughput": (-2.0, 6.0),
 }
 
 plt.rcParams.update({

@@ -12,41 +12,38 @@ latency and output throughput.
 | `baseline` | `ATEN,TRITON` |
 | `treatment` | `ATEN,TRITON,FLYDSL` |
 
-**Published result** (ISL=256 / OSL=512, concurrency 8–256; Llama n>=2, Qwen mostly n=1):
+**Published result** (ISL=256 / OSL=512, concurrency 8–256, n>=2 in every cell):
 
 | model | TPOT | TTFT | e2e latency | output throughput |
 |---|---|---|---|---|
-| Qwen3-32B | 1.0187x | 1.0207x | 1.0187x | 1.0185x |
+| Qwen3-32B | 1.0173x | 1.0106x | 1.0169x | 1.0168x |
 | Llama-3.3-70B-Instruct | 1.0065x | 1.0026x | 1.0066x | 1.0065x |
 
-**The two panels differ in quality, and the numbers are not a reproduction
-target.**
+**Do not target these numbers.** All twelve cells now meet the collection
+criteria — n>=2 repeats, both arms on the same Triton search space, both arms
+collected back to back on the same card, symmetric autotune coverage, identical
+KV capacity — but the geometric means are still larger than what the data
+supports per cell.
 
-The **Llama panel is clean**: every cell has n>=2 repeats (c=16 and c=64 have
-n=3), both arms share the Triton search space, both arms were collected back to
-back on the same card (0.01-0.21 h apart), and autotune coverage is symmetric
-between arms in all six cells. Its +0.65% is nonetheless **smaller than the
-measured noise floor of 1.93%**, so the honest reading is "no significant
-difference", not "0.65% faster".
+**Noise floor**: pooling all 24 replicated measurements gives a within-run
+standard deviation of **1.71%** in log space. At n=2 that is roughly the standard
+error of a single cell's ratio, so **a per-cell change under about 1.7% is one
+sigma**. By that standard only **Qwen c=64 (+5.7%)** clears the noise — its
+baseline was measured 6 times and its treatment twice, putting the effect near
+3.6 sigma. The other eleven cells, including all six Llama cells, sit inside the
+noise, so the honest reading for Llama is "no significant difference", not
+"0.65% faster".
 
-The **Qwen panel still has four defects**, all confined to five of its six cells
-(c=8/32/64/128/256; c=16 was re-measured and is clean):
+Repeats change conclusions in both directions, which is why n=1 is useless here:
 
-- single measurement, n=1, so the cell cannot estimate its own uncertainty;
-- the baseline arm ran Triton's exhaustive candidate space while the treatment
-  arm ran the default one (server logs show 5160 candidates against 36);
-- autotune coverage is asymmetric — at c=128 the baseline log contains no
-  autotune blocks at all;
-- the two arms were collected 4.6 to 27.2 hours apart instead of back to back.
+| cell | few repeats | after re-measurement |
+|---|---|---|
+| Llama c=8 | -3.4% (n=1) | +1.1% (n=2) |
+| Llama c=16 | +3.8% (n=2) | +0.3% (n=3) |
+| Qwen c=8 | +3.5% (n=1) | +0.2% (n=2) |
+| Qwen c=64 | +0.3% (n=1) | +5.7% (baseline n=6) |
 
-The bias runs *against* the treatment arm, so Qwen's number understates rather
-than inflates. That makes it conservative, not publishable.
-
-**Noise floor**: pooling all 14 replicated measurements gives a within-run
-standard deviation of **1.93%** in log space. At n=2 that is roughly the standard
-error of a single cell's ratio, so any per-cell change under about 2% is one
-sigma. Three cells changed sign or magnitude substantially when repeats were
-added (Llama c=8: -3.4% -> +1.1%; c=16: +3.8% -> +0.3%; c=32: -1.2% -> +0.5%).
+A single pass invents gains that are not there *and* hides gains that are.
 
 So: run the full matrix in **one batch** with `E2E_REPEATS=3`, and judge the
 result by whether the checks in section 4 pass — not by whether it matches these
@@ -146,7 +143,7 @@ you can set it.
 Three of these are load-bearing and silently ruin the result if wrong:
 
 1. **`E2E_REPEATS=2`.** The pooled within-run standard deviation on this
-   workload is **1.93%** in log space, and a single arm's repeat range reached
+   workload is **1.71%** in log space, and a single arm's repeat range reached
    7.7% in one cell. With `n=1` you cannot distinguish a 2% effect from drift and
    the sign flips between runs — three cells in the published batch did exactly
    that once repeats were added. This default was once `1`, which produced a
@@ -246,7 +243,7 @@ PY
 
 Expected: `baseline` shows **flydsl=0** (the backend is not in its list), and
 `treatment` shows a non-zero flydsl count. Reference values from the published
-run: Qwen 28 of 100 decisions (28%, median margin +6.59%), Llama 76 of 182 (42%,
+run: Qwen 51 of 168 decisions (30%, median margin +5.58%), Llama 76 of 182 (42%,
 +3.29%).
 
 A treatment arm with `flydsl=0` means the backend never routed. Stop and debug
