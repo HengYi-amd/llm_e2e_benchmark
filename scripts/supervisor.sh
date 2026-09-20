@@ -81,7 +81,7 @@ record_failure() {
     diag "$short c=$conc $arm r$rep: rounds=$(grep -ac 'AUTOTUNE mm(' "$log") signature=${sig:-<none>}"
 }
 
-say "supervisor started (poll ${SV_POLL_S}s, util $SV_UTIL, run $RID)"
+say "supervisor started (poll ${SV_POLL_S}s, util $SV_UTIL, watching $RUN_DIR)"
 while : ; do
     missing=0 relaunched=0
     cov=" $(covered_pairs | tr '\n' ' ') "

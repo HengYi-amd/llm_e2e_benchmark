@@ -12,38 +12,45 @@ latency and output throughput.
 | `baseline` | `ATEN,TRITON` |
 | `treatment` | `ATEN,TRITON,FLYDSL` |
 
-**Published result** (ISL=256 / OSL=512, concurrency 8–256, n=2):
+**Published result** (ISL=256 / OSL=512, concurrency 8–256; Llama n>=2, Qwen mostly n=1):
 
 | model | TPOT | TTFT | e2e latency | output throughput |
 |---|---|---|---|---|
-| Qwen3-32B | 1.0178x | 1.0269x | 1.0184x | 1.0183x |
-| Llama-3.3-70B-Instruct | 1.0045x | 1.0081x | 1.0048x | 1.0047x |
+| Qwen3-32B | 1.0187x | 1.0207x | 1.0187x | 1.0185x |
+| Llama-3.3-70B-Instruct | 1.0065x | 1.0026x | 1.0066x | 1.0065x |
 
-**Those two numbers are not yet publishable, and reproducing them is not the
-goal.** The published batch was assembled from three collection sessions and
-carries four defects a single clean run avoids:
+**The two panels differ in quality, and the numbers are not a reproduction
+target.**
 
-- 8 of its 12 cells are single measurements — all six Qwen cells, plus Llama
-  c=16 and c=64.
-- Three cells (Qwen c=128, Qwen c=256, Llama c=64) ran Triton's **exhaustive**
-  candidate space in the baseline arm and the **default** space in the treatment
-  arm, so those are not a backend-only A/B. Server logs show 5160 Triton
-  candidates against 36.
-- Llama's baseline changes along the concurrency axis (exhaustive at c=16 and
-  c=64, default elsewhere), so the *shape* of its curve mixes two baselines.
-- In 8 of 16 arm pairs the two arms were collected 4.6 to 27.2 hours apart
-  rather than back to back, because resume logic skipped an already-present
-  baseline during a later manual top-up.
+The **Llama panel is clean**: every cell has n>=2 repeats (c=16 and c=64 have
+n=3), both arms share the Triton search space, both arms were collected back to
+back on the same card (0.01-0.21 h apart), and autotune coverage is symmetric
+between arms in all six cells. Its +0.65% is nonetheless **smaller than the
+measured noise floor of 1.93%**, so the honest reading is "no significant
+difference", not "0.65% faster".
 
-On the only four cells that do have repeats, the arm difference is
-indistinguishable from zero: effect +0.36%, pooled within-run sd 0.91% in log
-space, exact permutation test p = 0.50.
+The **Qwen panel still has four defects**, all confined to five of its six cells
+(c=8/32/64/128/256; c=16 was re-measured and is clean):
+
+- single measurement, n=1, so the cell cannot estimate its own uncertainty;
+- the baseline arm ran Triton's exhaustive candidate space while the treatment
+  arm ran the default one (server logs show 5160 candidates against 36);
+- autotune coverage is asymmetric — at c=128 the baseline log contains no
+  autotune blocks at all;
+- the two arms were collected 4.6 to 27.2 hours apart instead of back to back.
+
+The bias runs *against* the treatment arm, so Qwen's number understates rather
+than inflates. That makes it conservative, not publishable.
+
+**Noise floor**: pooling all 14 replicated measurements gives a within-run
+standard deviation of **1.93%** in log space. At n=2 that is roughly the standard
+error of a single cell's ratio, so any per-cell change under about 2% is one
+sigma. Three cells changed sign or magnitude substantially when repeats were
+added (Llama c=8: -3.4% -> +1.1%; c=16: +3.8% -> +0.3%; c=32: -1.2% -> +0.5%).
 
 So: run the full matrix in **one batch** with `E2E_REPEATS=3`, and judge the
-result by whether the checks in section 4 pass — not by whether it matches
-1.0178x.
-
----
+result by whether the checks in section 4 pass — not by whether it matches these
+numbers.
 
 ## 1. Prerequisites
 
@@ -138,10 +145,13 @@ you can set it.
 
 Three of these are load-bearing and silently ruin the result if wrong:
 
-1. **`E2E_REPEATS=2`.** The repeat spread on this workload is ~1.2% median and
-   ~2.6% worst case for TPOT. With `n=1` you cannot distinguish a 2% effect from
-   drift and the sign flips between runs. This default was once `1`, which
-   produced a published-looking result that reversed on re-measurement.
+1. **`E2E_REPEATS=2`.** The pooled within-run standard deviation on this
+   workload is **1.93%** in log space, and a single arm's repeat range reached
+   7.7% in one cell. With `n=1` you cannot distinguish a 2% effect from drift and
+   the sign flips between runs — three cells in the published batch did exactly
+   that once repeats were added. This default was once `1`, which produced a
+   published-looking result that reversed on re-measurement. Prefer `3`: at n=2 a
+   single outlying run still moves the median.
 
 2. **`E2E_TRITON_DEFAULT_SPACE=1`.** Keeps Triton on its default candidate space
    while the candidate backend runs exhaustive. Triton's exhaustive space adds
@@ -236,8 +246,8 @@ PY
 
 Expected: `baseline` shows **flydsl=0** (the backend is not in its list), and
 `treatment` shows a non-zero flydsl count. Reference values from the published
-run: Qwen 23/88 decisions (26%, median margin +9.50%), Llama 56/130 (43%,
-+3.57%).
+run: Qwen 28 of 100 decisions (28%, median margin +6.59%), Llama 76 of 182 (42%,
++3.29%).
 
 A treatment arm with `flydsl=0` means the backend never routed. Stop and debug
 before reading any speedup — re-run `bash scripts/bench/route_smoke.sh`, which

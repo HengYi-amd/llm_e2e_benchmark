@@ -244,12 +244,20 @@ tokens: at that width TTFT measures scheduling, not GEMM time.
 
 ### Repeats
 
-`E2E_REPEATS=2` is the floor, not a nicety. The measured repeat spread on this
-workload is **~1.2% median and ~2.6% worst case for TPOT**, and worse for TTFT.
-A single pass therefore cannot distinguish a 2% effect from drift, and the sign
-of such an effect flips between runs. Aggregation takes the median per cell and
-records a `*_spread` column beside every metric; `normalize.py` warns when a
-cell's repeats disagree by more than 5%.
+`E2E_REPEATS=2` is the floor, not a nicety. Pooling every replicated measurement
+on this workload gives a within-run standard deviation of **1.93%** in log space,
+and one arm's repeat range reached **7.7%** in a single cell. A single pass
+therefore cannot distinguish a 2% effect from drift, and the sign of such an
+effect flips between runs — three cells changed sign or halved once repeats were
+added. Prefer `3` where the schedule allows: at n=2 one outlying run still moves
+the median.
+
+Aggregation takes the **median** per cell — the columns are suffixed `_mean` for
+historical reasons but hold medians — and records a `*_spread` column beside
+every metric; `normalize.py` warns when a cell's repeats disagree by more than
+5%. Because each metric's median is taken independently, at n=3 a cell's
+aggregated row can mix repeats, so the identity `e2el = ttft + (OSL-1)*tpot`
+holds per repeat but can drift by up to ~0.07% in the aggregate.
 
 Repeats are ABBA-interleaved: repeat 1 runs `baseline` then `treatment`, repeat
 2 runs them in the opposite order, so drift over the sweep cannot masquerade as

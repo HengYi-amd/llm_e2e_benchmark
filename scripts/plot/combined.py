@@ -33,7 +33,12 @@ SLUG = {"TPOT": "tpot", "TTFT": "ttft",
 # Symmetric auto-scaling wastes most of the panel when a metric's values sit
 # almost entirely on one side of zero, which is the case for TTFT. Pin the axis
 # for those so the bars fill the frame; anything unlisted keeps auto-scaling.
-YLIM = {"TTFT": (-2.0, 10.0)}
+YLIM = {
+    "TTFT": (-3.0, 10.0),
+    "TPOT": (-2.0, 4.0),
+    "end-to-end latency": (-2.0, 4.0),
+    "output throughput": (-2.0, 4.0),
+}
 
 plt.rcParams.update({
     "figure.facecolor": SURFACE, "axes.facecolor": SURFACE,
@@ -89,13 +94,18 @@ def one_figure(agg, raw, metric, name, phase, out_dir):
     ax.grid(axis="y", color=GRID, lw=0.6)
     ax.set_axisbelow(True)
     ax.tick_params(length=0)
-    ax.legend(loc="upper left", fontsize=9)
+    # Above the axes, not inside them: a pinned y-limit leaves no guaranteed
+    # free corner, and an in-panel legend then lands on top of the tallest bar
+    # and its value label.
+    ax.legend(loc="lower left", bbox_to_anchor=(0.0, 1.02), ncol=2,
+              fontsize=9, borderaxespad=0.0)
 
     isl = int(raw.isl.iloc[0]) if "isl" in raw.columns else 0
     osl = int(raw.osl.iloc[0]) if "osl" in raw.columns else 0
     chunk = int(raw.max_num_batched_tokens.iloc[0]) if "max_num_batched_tokens" in raw.columns else 0
+    # Padded past the legend row that sits just above the axes.
     ax.set_title(f"vLLM Inference: BF16, MI355X\n{name} ({phase})",
-                 fontsize=12, loc="center")
+                 fontsize=12, loc="center", pad=34)
     foot = (f"Baseline: ATEN+TRITON  |  Treatment: ATEN+TRITON+FLYDSL  |  "
             f"torch.compile, max-autotune  |  TP=1\n"
             f"vllm bench serve, ISL={isl} / OSL={osl}, "
