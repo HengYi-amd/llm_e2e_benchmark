@@ -96,7 +96,9 @@ def self_test(root):
     ok = True
     rows = []
     for name, kind in cases:
-        d = root / "caches" / "inductor" / name
+        # Same tree the arm scan uses: the engine writes its compiled modules
+        # under the vLLM cache root, not the Inductor one.
+        d = root / "caches" / "vllm" / name
         if not d.is_dir():
             rows.append((name, kind, "missing", False)); ok = False; continue
         r = scan(d)
@@ -167,6 +169,14 @@ def main():
         (run_dir / "raw").mkdir(parents=True, exist_ok=True)
         json.dump(res, open(run_dir / "raw" / "route_evidence.json", "w"),
                   indent=2, ensure_ascii=False)
+
+    # The gate has to be able to fail. Writing a verdict that says the
+    # comparison is invalid and then exiting 0 is not a gate: downstream stages
+    # would publish a backend speedup that nothing shows the backend produced.
+    if not summary.get("flydsl_won_any"):
+        print("route proof FAILED: the backend never won a GEMM, so the two arms "
+              "ran the same kernels", file=sys.stderr)
+        sys.exit(2)
 
 
 if __name__ == "__main__":

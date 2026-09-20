@@ -1,6 +1,7 @@
 # Results, caches and weights stay out of the repository. The repo is the
 # method; the numbers belong to a particular machine and a particular run.
-artifacts/
+runs/
+result/
 caches/
 models/
 logs/
@@ -18,3 +19,6 @@ patches/vllm_force_aten_linear.json
 
 # backup of the upstream file, made by patch_vllm.sh at patch time
 patches/layers_utils.orig.py
+
+# NFS leaves these behind when a deleted file is still open
+.nfs*

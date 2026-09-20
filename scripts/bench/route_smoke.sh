@@ -10,8 +10,11 @@ set -Eeuo pipefail
 # the same name, which surfaces as a model-loading error.
 cd "$E2E_ROOT"
 
-SMOKE_CACHE_TAG="${SMOKE_CACHE_TAG:-smoke}"
-RUN_DIR="${RUN_DIR:-$E2E_ARTIFACTS/runs/$(cat "$E2E_ROOT/state/current_run_id")}"
+# Default the tag to the run id. A reused cache directory serves compiled
+# artifacts without autotuning, and zero AUTOTUNE lines then reads as a
+# routing failure when it is only a cache hit.
+SMOKE_CACHE_TAG="${SMOKE_CACHE_TAG:-smoke_$(cat "$E2E_ROOT/state/current_run_id" 2>/dev/null || echo default)}"
+RUN_DIR="${RUN_DIR:-$E2E_ARTIFACTS/$(cat "$E2E_ROOT/state/current_run_id")}"
 mkdir -p "$RUN_DIR/raw"
 OUT="$RUN_DIR/raw/route_smoke${SMOKE_CACHE_TAG:+_$SMOKE_CACHE_TAG}.log"
 JSON="$RUN_DIR/raw/route_smoke${SMOKE_CACHE_TAG:+_$SMOKE_CACHE_TAG}.json"
@@ -37,6 +40,16 @@ export VLLM_DISABLE_COMPILE_CACHE=1
 export SMOKE_GEMM_BACKENDS SMOKE_AUTOTUNE_SEARCH_SPACE \
        SMOKE_MAX_NUM_BATCHED_TOKENS
 export TORCHINDUCTOR_MAX_AUTOTUNE_GEMM_BACKENDS="$SMOKE_GEMM_BACKENDS"
+
+# The gate must run under the same GEMM routing as the sweep. Without this the
+# platform keeps GEMM inside a custom op the compiler cannot see through, no
+# aten.mm is ever produced, and the gate reports zero candidates - which reads
+# as "the backend is unavailable" when it only means the switch was missing.
+export VLLM_FORCE_ATEN_LINEAR=1
+export VLLM_ROCM_USE_SKINNY_GEMM=0
+export TORCHINDUCTOR_ORIGAMI="${E2E_ORIGAMI:-1}"
+export TORCHINDUCTOR_ORIGAMI_TOPK="${E2E_ORIGAMI_TOPK:-6}"
+export FLYDSL_ENABLE_AUTOTUNING="${E2E_FLYDSL_AUTOTUNING:-1}"
 mkdir -p "$TORCHINDUCTOR_CACHE_DIR" "$VLLM_CACHE_ROOT"
 
 MODEL="${SMOKE_MODEL:-Qwen/Qwen3-0.6B}"

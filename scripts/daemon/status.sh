@@ -53,6 +53,6 @@ done" 2>/dev/null
 
 echo
 echo "== artifacts =="
-[ -d "$E2E_ARTIFACTS/runs" ] &&
-    find "$E2E_ARTIFACTS/runs" -maxdepth 3 -type d 2>/dev/null | head -10 | sed 's|^|  |'
+[ -d "$E2E_ARTIFACTS" ] &&
+    find "$E2E_ARTIFACTS" -maxdepth 3 -type d 2>/dev/null | head -10 | sed 's|^|  |'
 echo "  plots: $(ls -1 "$E2E_ARTIFACTS"/runs/*/plots/*.png 2>/dev/null | wc -l)"

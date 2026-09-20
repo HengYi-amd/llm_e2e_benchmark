@@ -6,7 +6,9 @@ set -uo pipefail
 # shellcheck disable=SC1091
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd -P)/env.sh"
 
-GPUS="${GPUS:-0 1 2 3 4 5 6 7}"
+# Check only the GPUs this run will use: on a shared node another job on
+# an unused card is not a reason to refuse.
+GPUS="${E2E_GPUS:-0 1 2 3 4 5 6 7}"
 VRAM_LIMIT=${VRAM_LIMIT:-2000}
 ACT_LIMIT=${ACT_LIMIT:-5}
 MIN_FREE_GB=${E2E_MIN_FREE_GB:-100}

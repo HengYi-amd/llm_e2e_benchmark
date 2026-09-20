@@ -5,6 +5,7 @@ e2e_agg.csv    one row per (model, dtype, profile, concurrency, arm) cell, with
                the arm-relative speedup for every reported metric
 """
 import argparse
+import os
 import json
 import pathlib
 
@@ -49,8 +50,14 @@ def main():
         print("normalize: no known metric columns present")
         return
 
+    # Median across repeats, not mean: one slow repeat - a shard that shared the
+    # node with a heavier neighbour, say - shifts a mean but not a median. The
+    # two are identical at n=2, so the spread below is what shows whether the
+    # repeats agreed.
     g = ok.groupby(CELL + ["arm"], dropna=False).agg(
-        **{f"{m}_mean": (m, "mean") for m in metrics},
+        **{f"{m}_mean": (m, "median") for m in metrics},
+        **{f"{m}_spread": (m, lambda v: (v.max() - v.min()) / v.min()
+                           if len(v) > 1 and v.min() else 0.0) for m in metrics},
         **{f"{m}_std": (m, "std") for m in metrics},
         n=(metrics[0], "count"),
     ).reset_index()
@@ -93,6 +100,21 @@ def main():
     else:
         print("e2e_agg: WARNING — no kv_cache_tokens parsed; consistency unverified")
         g["kv_consistent"] = False
+
+    # A cell whose repeats disagree by more than the run-to-run noise band is not
+    # a measurement of the kernels; it is a measurement of whatever else changed.
+    tol = float(os.environ.get("E2E_REPEAT_TOL", "0.05"))
+    for m in metrics:
+        col = f"{m}_spread"
+        if col not in g.columns:
+            continue
+        bad = g[g[col] > tol]
+        if len(bad):
+            print(f"e2e_agg: WARNING — {len(bad)} cell(s) whose repeats of {m} "
+                  f"disagree by more than {tol:.0%}; treat those points as suspect")
+            for _, r in bad.iterrows():
+                print(f"    {r['model_id']} c={r['concurrency']} {r['arm']}: "
+                      f"spread {r[col]:.1%}")
 
     g.to_csv(out / "e2e_agg.csv", index=False)
     print(f"e2e_bench: {len(df)} rows -> {out / 'e2e_bench.csv'}")

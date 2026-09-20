@@ -11,6 +11,10 @@ identical, so any difference is attributable to that change.
 The harness is backend-, model- and dtype-agnostic. The shipped defaults target
 the FlyDSL backend at bf16; see [Extending it](#extending-it).
 
+For the exact parameters of the published run, and why each was chosen, see
+[RUN_Recipe.md](RUN_Recipe.md). For a self-contained reproduction procedure,
+see [.claude/REPRODUCE.md](.claude/REPRODUCE.md).
+
 ---
 
 ## Contents
@@ -23,8 +27,8 @@ the FlyDSL backend at bf16; see [Extending it](#extending-it).
 - [Pipeline stages](#pipeline-stages)
 - [Design decisions](#design-decisions)
 - [Controls the harness enforces](#controls-the-harness-enforces)
+- [Reading a result](#reading-a-result)
 - [Extending it](#extending-it)
-- [Interpreting the output](#interpreting-the-output)
 
 ## What it measures
 
@@ -33,19 +37,27 @@ the FlyDSL backend at bf16; see [Extending it](#extending-it).
 | `baseline` | `ATEN,TRITON` |
 | `treatment` | `ATEN,TRITON,FLYDSL` |
 
-Three metrics, collected with `vllm bench serve`:
+The treatment arm is a superset. Autotune benchmarks every candidate and keeps
+the fastest, so adding a backend can only change the outcome where that backend
+measured faster. Any end-to-end regression therefore points at measurement
+noise or at an autotune decision made inside its own noise — not at a slower
+kernel. See [Reading a result](#reading-a-result).
+
+Metrics, collected with `vllm bench serve`:
 
 | metric | isolates | role |
 |---|---|---|
 | **TPOT** — time per output token | decode steady state; GEMM M = concurrency | headline |
 | **TTFT** — time to first token | prefill; large-M GEMMs | supporting |
+| **end-to-end latency** | whole request | supporting |
 | **output throughput** — tokens/s | serving capacity | supporting |
 
 TTFT and TPOT are reported separately rather than as one fused latency. A GEMM
 backend moves the two phases by different factors: decode GEMMs are skinny and
 memory-bound, prefill GEMMs are large-M and compute-bound. A fused wall-clock
 number blends them, hides which one moved, and can be shifted by changing the
-output length alone.
+output length alone. (`mean_e2el_ms` does equal `TTFT + TPOT x (OSL-1)` to
+within rounding, so nothing is lost by reporting the parts.)
 
 ## Requirements
 
@@ -53,8 +65,9 @@ output length alone.
   through its CLI; it does not import it.
 - A Python environment containing both, reachable via `E2E_VENV`.
 - `curl` for server readiness probing, and a GPU query tool (`amd-smi` or
-  `rocm-smi`) for the preflight checks; a missing query tool degrades to a
-  warning rather than a failure.
+  `rocm-smi`) for the preflight checks and for shard scheduling.
+- Enough VRAM for the largest model at TP=1. The shipped defaults assume a
+  single card can hold the 70B weights plus the pinned KV cache.
 
 `scripts/build/` holds optional source-build helpers if a specific revision of
 PyTorch or vLLM is needed.
@@ -62,7 +75,7 @@ PyTorch or vLLM is needed.
 ## Quick start
 
 ```bash
-git clone https://github.com/HengYi-amd/llm_e2e_benchmark.git
+git clone <this-repository>
 cd llm_e2e_benchmark
 
 export E2E_VENV=/path/to/python/env      # required
@@ -76,15 +89,21 @@ Narrow the sweep without editing anything:
 
 ```bash
 E2E_MODELS="<hf-model-id>" \
-E2E_PROFILES=blog \
-E2E_CONCURRENCY_SWEEP="1 8 64" \
+E2E_CONCURRENCY_SWEEP="8 64" \
   bash scripts/run_all.sh
 ```
 
 Re-run only post-processing against an existing run:
 
 ```bash
-E2E_ONLY="07 08 09" bash scripts/run_all.sh
+E2E_ONLY="07 08 09 10" bash scripts/run_all.sh
+```
+
+Guard a long sweep. The supervisor relaunches only points that no live shard is
+working on, and never signals a healthy one:
+
+```bash
+bash scripts/supervisor.sh &
 ```
 
 Run detached, and stop safely:
@@ -96,12 +115,13 @@ bash scripts/daemon/stop.sh
 ```
 
 `stop.sh` verifies the recorded process still belongs to this run before
-signalling, kills the process tree rather than the process group, removes the
-temporary directory, and re-checks every GPU afterwards. On a shared machine a
-stop that leaves a server holding memory, or that kills an unrelated job, is
-worse than no stop at all.
+signalling, and kills the process tree rather than the process group. On a
+shared machine a stop that leaves a server holding memory, or that kills an
+unrelated job, is worse than no stop at all. `daemon/stop.sh` will not sweep for
+leftovers by pattern unless `E2E_STOP_SWEEP=1` is set, because such a sweep also
+matches shards started by hand or by a second run.
 
-Set `E2E_CONTAINER` when the GPU stack lives in a container and the daemon is
+Set `E2E_CONTAINER` when the GPU stack lives in a container and the pipeline is
 driven from outside it; leave it empty to run everything directly.
 
 ## Repository layout
@@ -112,6 +132,9 @@ env.sh                      paths and cache isolation; sourced by every script
 
 scripts/
   run_all.sh                the pipeline; stages are resumable
+  supervisor.sh             relaunch missing points without disturbing live ones
+  progress.sh               point count, per-shard state, elapsed time
+  stop.sh                   process-tree kill used by daemon/stop.sh
   preflight/                GPU availability checks
   setup/
     verify_stack.py         assert the installed versions match expectations
@@ -119,52 +142,63 @@ scripts/
   bench/
     route_smoke.sh          gate: prove the backend is reachable
     route_smoke_probe.py    the probe the gate runs
-    calibrate_kv.sh         pin KV capacity equal across arms
+    calibrate_kv.sh         measure KV capacity for one model
+    calibrate_kv_all.sh     pin it, per model, equal across arms
+    gpumap.sh               map HIP device index to the GPU tool's numbering
     run_e2e.sh              one shard: a server per arm, swept over concurrency
-    run_sharded.sh          fan shards across GPUs
+    run_sharded.sh          fan shards across GPUs, claiming cards as they free
     tally_route.py          parse autotune selections from a log
   proof/route_evidence.py   did the backend actually execute?
   normalize/normalize.py    raw results into tidy CSVs, with integrity checks
-  plot/plot.py              speedup bars and absolute-value lines
-  report/report.py          assemble REPORT.md
+  plot/
+    plot.py                 per-model speedup bars and absolute-value lines
+    combined.py             one chart per metric with every model on it
+  publish.py                the deliverable layout under result/
   daemon/                   start / status / stop
-  stop.sh                   process-tree kill used by daemon/stop.sh
 
 patches/flydsl_raw_args.patch   optional compiler-side fix, see below
 ```
 
-Output goes to `artifacts/runs/<run_id>/`, which is not tracked:
+Everything a run writes stays out of version control. `runs/<run_id>/`:
 
 ```text
 raw/e2e/*.json      one file per point, carrying its full workload description
 normalized/*.csv    per-point and per-cell tables
 figures/*.png       each with a JSON sidecar
-report/REPORT.md
-manifest/run.json   environment fingerprint
-logs/
+logs/               one server log per (arm, model, repeat, concurrency)
 ```
+
+and `result/` holds the published copies: one flat directory per
+(model, dtype), plus a directory of cross-model comparison figures.
 
 ## Configuration
 
 Every value in [`config/default.env`](config/default.env) can be overridden
-from the environment.
+from the environment. The defaults are the published recipe.
 
 | knob | default | note |
 |---|---|---|
 | `E2E_MODELS` | two dense models | dense only; MoE changes which GEMMs exist |
 | `E2E_DTYPES` | `bfloat16` | |
 | `E2E_ARMS` | `baseline treatment` | backend lists in `E2E_BACKENDS_<arm>` |
-| `E2E_CONCURRENCY_SWEEP` | `1 … 128` | becomes the decode GEMM's M |
-| `E2E_PROFILES` | `chunked blog` | workload shapes, below |
+| `E2E_CONCURRENCY_SWEEP` | `8 16 32 64 128 256` | becomes the decode GEMM's M |
+| `E2E_PROFILES` | `showcase` | workload shape, below |
+| `E2E_PROFILE_showcase` | `256:512` | ISL:OSL |
 | `E2E_TP` | `1` | |
-| `E2E_MAX_NUM_BATCHED_TOKENS` | `8192` | pinned, not defaulted |
+| `E2E_MAX_NUM_BATCHED_TOKENS` | `2048` | pinned, not defaulted |
 | `E2E_MAX_MODEL_LEN` | `4096` | |
-| `E2E_GPU_MEM_UTIL` | `0.85` | |
-| `E2E_AUTOTUNE_SEARCH_SPACE` | `DEFAULT` | |
+| `E2E_GPU_MEM_UTIL` | `0.85` | with KV pinned; higher starved the compile workspace |
+| `E2E_AUTOTUNE_SEARCH_SPACE` | `EXHAUSTIVE` | applies to the candidate backend |
+| `E2E_TRITON_DEFAULT_SPACE` | `1` | keeps Triton on its default space regardless |
 | `E2E_FLYDSL_AUTOTUNING` | `1` | required; see below |
-| `E2E_REPEATS` | `2` | ABBA-interleaved |
-| `E2E_GPUS` | `0 … 7` | shards, not tensor parallelism |
+| `E2E_REPEATS` | `2` | ABBA-interleaved; see below |
+| `E2E_GPUS` | every GPU present | shards, not tensor parallelism |
 | `E2E_CONTAINER` | empty | run directly, or wrap in a container |
+
+`config/default.env` is sourced with `set -a`, so every value is exported and
+inherited by child processes. **A process already running does not see an edit
+to that file.** Change a value and relaunch; to confirm a running process picked
+one up, read it back from `/proc/<pid>/environ` rather than from the file.
 
 ## Pipeline stages
 
@@ -178,32 +212,48 @@ from the environment.
 | `05_e2e` | the sweep, sharded across GPUs |
 | `06_route_proof` | confirm the backend executed at runtime |
 | `07_normalize` | tidy tables, integrity checks |
-| `08_plot` | figures |
-| `09_report` | `REPORT.md` |
+| `08_plot` | per-model figures |
+| `09_publish` | the deliverable layout under `result/` |
+| `10_combined` | cross-model comparison figures |
 
 A stage already marked passed is skipped, so a re-run resumes rather than
-recompiling from scratch.
+recompiling from scratch. `E2E_FROM=05` starts from a stage; `E2E_ONLY="07 08"`
+runs only those.
 
 ## Design decisions
 
-### Workload profiles
+### Workload profile
 
 **ISL** (input sequence length) sets the prefill work; **OSL** (output sequence
 length) sets the number of decode steps.
 
+The shipped `showcase` profile is ISL=256 / OSL=512: long enough that prefill is
+real work rather than scheduling overhead, and decode-dominated enough that TPOT
+is the headline. Two decode steps per prefill token keeps the steady state in
+the concurrency-shaped GEMM regime the backend is being tested on.
+
 vLLM schedules prefill in chunks of at most `max_num_batched_tokens`. That
 default differs between the offline and server code paths, so the harness pins
 it: a benchmark whose chunk size depends on which entry point was used is not
-reproducible.
+reproducible. **The pinned value, not ISL, is what sets the prefill GEMM's M.**
+A prefill step is `min(ISL x concurrency, max_num_batched_tokens)` tokens wide,
+so raising concurrency reaches the cap long before raising ISL does.
 
-| profile | ISL | OSL | purpose |
-|---|---|---|---|
-| `chunked` | 2048 | 128 | prefill reaches a full chunk, so TTFT reflects real prefill GEMMs |
-| `blog` | 32 | 128 | short-prompt reference shape; one prefill step against 127 decode steps, so read it as decode-only |
+`plot.py` refuses to draw TTFT when the widest prefill in the sweep is under 512
+tokens: at that width TTFT measures scheduling, not GEMM time.
 
-Do not draw a prefill conclusion from the `blog` profile: at that prompt length
-TTFT is dominated by scheduling overhead rather than GEMM time. `plot.py` omits
-that combination for this reason.
+### Repeats
+
+`E2E_REPEATS=2` is the floor, not a nicety. The measured repeat spread on this
+workload is **~1.2% median and ~2.6% worst case for TPOT**, and worse for TTFT.
+A single pass therefore cannot distinguish a 2% effect from drift, and the sign
+of such an effect flips between runs. Aggregation takes the median per cell and
+records a `*_spread` column beside every metric; `normalize.py` warns when a
+cell's repeats disagree by more than 5%.
+
+Repeats are ABBA-interleaved: repeat 1 runs `baseline` then `treatment`, repeat
+2 runs them in the opposite order, so drift over the sweep cannot masquerade as
+an arm effect.
 
 ### Tensor parallelism
 
@@ -212,17 +262,24 @@ would be tested on GEMMs a fraction of their real width, and each decoder layer
 would add collective calls to the decode critical path — time both arms pay
 equally, which only dilutes the signal.
 
-TP=1 does not mean one GPU is used. `run_sharded.sh` occupies every configured
+TP=1 does not mean one GPU is used. `run_sharded.sh` occupies every available
 GPU by running independent single-GPU shards. Both arms of a cell run on the
 same GPU, because the arm ratio is the result and inter-card clock or thermal
 spread would otherwise look like a backend difference.
 
+Cards are claimed opportunistically: a card another user has queues on is
+skipped rather than taken, and picked up later when it drains. After a grace
+period the free-memory test alone decides, which still cannot evict anyone.
+
 ### Autotune breadth
 
-`E2E_AUTOTUNE_SEARCH_SPACE=DEFAULT`. The exhaustive space turns each GEMM from
-a few dozen benchmarked candidates into thousands, costing hours per model, and
-on some platforms it bypasses the shipped selection heuristic — measuring a
-path that is not the one users get.
+The candidate backend runs its **exhaustive** space; Triton stays on its
+**default** space (`E2E_TRITON_DEFAULT_SPACE=1`). Triton's exhaustive space
+costs hours of precompilation per model for a selection that, on the shapes
+under test here, did not differ measurably from its default space. Spending
+that time does not change the comparison, and the precompilation timeout
+silently drops candidates under load, which makes the surviving set depend on
+machine load rather than on the configuration.
 
 `E2E_FLYDSL_AUTOTUNING=1` is required. That setting defaults to off upstream,
 and with it off the backend contributes a single hardcoded configuration
@@ -260,20 +317,57 @@ candidate. Apply it only if the installed PyTorch lacks it.
 
 | control | without it |
 |---|---|
-| Per-arm compile caches | the second arm loads the first arm's artifacts, skips autotune, and reports a cache hit as a result |
+| Per-arm compile caches, wiped per point | the second arm loads the first arm's artifacts, skips autotune, and reports a cache hit as a result |
 | KV capacity pinned equal | the arm granted more KV blocks wins on throughput for reasons unrelated to GEMMs |
 | Compile size list covers both phases | a missing size falls back to a dynamic graph where the backend is never a candidate |
 | Both arms of a cell on one GPU | inter-card variation is read as a backend effect |
 | ABBA repeat ordering | thermal drift over a long sweep is read as an arm effect |
+| At least two repeats, spread recorded | an effect smaller than the noise floor is reported as a result |
 | Explicit failure accounting | a cell silently dropping a repeat reads as a complete measurement |
 | Route evidence with controls | a speedup is reported without evidence the backend ran |
 | Full provenance per point | a metric without its workload is not comparable to anything |
+
+Cache directories are replaced by renaming and deleting in the background, not
+by deleting in place: on a network filesystem an in-place delete can fail on a
+still-open file handle, and under `set -e` that failure takes the whole sweep
+down silently.
+
+## Reading a result
+
+Read these before the numbers:
+
+1. **Route evidence.** If the backend never won an autotune decision, the arms
+   are functionally identical and any difference is noise. `route_evidence.py`
+   answers this; so does counting winners in the server logs. The winner of an
+   autotune round is the **first candidate line after the `dtypes:` line**, not
+   the line immediately after the `AUTOTUNE` header.
+2. **Repeat spread.** Compare each cell's reported change against that cell's
+   own `*_spread`. A change smaller than the spread is not a result, whatever
+   its sign.
+3. **Provenance parity.** Both arms of a cell must share search space, KV
+   capacity, batched-token cap and sequence cap. `normalize.py` checks KV; the
+   rest is in each point's JSON.
+4. **Scope.** The claim is conditional on the Inductor autotune path being in
+   use, and on the shapes this workload generates.
+
+A backend that wins autotune by a margin smaller than the benchmark's own noise
+is a coin flip, not a speedup: the selection can pick a kernel that is not
+actually faster in the serving loop, where cache state and contention differ
+from the isolated microbenchmark. Expect kernel-level wins to convert to
+end-to-end gains only where the model is not already bandwidth-bound — compare
+measured TPOT against the weight-streaming roofline before attributing a flat
+result to the backend.
+
+Figures carry their workload in a footnote, so a chart lifted into a
+presentation still says what it measured.
 
 ## Extending it
 
 **Another model.** Add it to `E2E_MODELS`. Prefer dense models: MoE routing
 changes which GEMMs exist, so dense and MoE models are not measuring the same
-thing. Check the model config for expert-related keys before adding.
+thing. Check the model config for expert-related keys before adding. Models
+without bias produce `mm`; models with bias also produce `addmm`, which a
+backend may or may not hook — check before assuming coverage.
 
 **Another backend.**
 
@@ -294,19 +388,3 @@ known-positive case reports "no wins" indefinitely.
 2. The backend's own dtype gate decides whether it produces candidates at all.
    Run `scripts/bench/route_smoke.sh` first: if it reports zero candidates, the
    sweep would silently compare the baseline against itself.
-
-## Interpreting the output
-
-`REPORT.md` states, for every claim, either its evidence or that the evidence
-is missing. Read three things before the numbers:
-
-1. **Route evidence.** If the backend did not execute, the speedups are
-   correlation, and the report says so.
-2. **Data integrity.** Failed points, and whether KV capacity was in fact equal
-   across arms.
-3. **Scope.** The conditional nature of the claim, and that autotune ran in its
-   default, pruned search space — the result is what the shipped heuristics
-   pick, not the ceiling either backend could reach.
-
-Figures carry the same context in their footnote, so a chart lifted into a
-presentation still says what it measured.

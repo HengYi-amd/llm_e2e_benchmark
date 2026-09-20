@@ -15,13 +15,23 @@ import pandas as pd
 
 # Contrast-checked categorical palette.
 C_MAIN, C_ALT = "#1baf7a", "#2a78d6"
+# Diverging pair for the change-vs-baseline bars: faster and slower are
+# opposite polarities, not two categories. Validated for CVD separation.
+C_UP, C_DOWN = "#2a78d6", "#d1603d"
+# One colour per model, never per sign: a bar's direction already carries
+# the sign, and recolouring by it makes two models look like four series.
+MODEL_COLORS = ["#2a78d6", "#d1603d"]
 INK, INK2, MUTED = "#0b0b0b", "#52514e", "#898781"
 GRID, AXIS, SURFACE = "#e1e0d9", "#c3c2b7", "#fcfcfb"
 CRIT = "#d03b3b"
 
+DTYPE_SHORT = {"bfloat16": "bf16", "float16": "fp16", "float32": "fp32"}
+
 METRIC_LABEL = {
     "mean_tpot_ms": ("TPOT", "time per output token", "decode steady state"),
     "mean_ttft_ms": ("TTFT", "time to first token", "prefill"),
+    "mean_e2el_ms": ("end-to-end latency", "TTFT + TPOT x (OSL - 1)",
+                     "whole request"),
     "output_throughput": ("output throughput", "tokens/s", "capacity"),
 }
 
@@ -44,6 +54,13 @@ def style(ax):
         ax.spines[s].set_linewidth(0.8)
 
 
+def fname(short, dtype, frame, metric_name):
+    """Figure name: model, dtype, workload, metric. Nothing else."""
+    isl, osl = int(frame.isl.iloc[0]), int(frame.osl.iloc[0])
+    tag = metric_name.lower().replace(" ", "")
+    return f"{short}_{DTYPE_SHORT.get(dtype, dtype)}_isl{isl}osl{osl}_{tag}"
+
+
 def save(fig, out, name, meta):
     out.mkdir(parents=True, exist_ok=True)
     fig.savefig(out / f"{name}.png", bbox_inches="tight")
@@ -52,62 +69,79 @@ def save(fig, out, name, meta):
     print(f"  {name}.png")
 
 
-def speedup_bars(d, out, model, dtype, prof, metric, arms, ctx):
+def speedup_bars(d, out, model, dtype, prof, metric, arms, ctx, color=MODEL_COLORS[0]):
     col = f"{metric}_speedup"
     t = d[(d.arm == arms[1]) & d[col].notna()].sort_values("concurrency")
     if t.empty:
         return
     sp = t[col].values
+    # Plot the change against the baseline, not the ratio: zero is the baseline,
+    # a faster point rises and a slower one falls. Direction carries the polarity
+    # on its own, so the two colours are reinforcement rather than the only cue.
+    pct = (sp - 1.0) * 100.0
     x = np.arange(len(t))
     short = model.split("/")[-1]
     name, unit, phase = METRIC_LABEL.get(metric, (metric, "", ""))
 
     fig, ax = plt.subplots(figsize=(7.2, 4.6))
-    ax.bar(x, sp, width=0.62, color=C_MAIN, zorder=3)
-    ax.axhline(1.0, color=AXIS, lw=1.0, zorder=4)
-    for xi, v in zip(x, sp):
-        if v >= 1.0:
-            ax.text(xi, v + 0.006, f"{v:.3f}x", ha="center", va="bottom",
-                    fontsize=8.5, color=INK, fontweight="bold", zorder=5)
-        else:
-            # Above a sub-1.0 bar the label would sit on the 1.0 line and read
-            # as parity, so place it inside the bar.
-            ax.text(xi, v - 0.008, f"{v:.3f}x", ha="center", va="top",
-                    fontsize=8.5, color="#ffffff", fontweight="bold", zorder=5)
-    ax.set_ylim(min(0.94, float(sp.min()) - 0.04), float(sp.max()) + 0.06)
+    ax.bar(x, pct, width=0.62, color=color, zorder=3)
+    ax.axhline(0.0, color=AXIS, lw=1.0, zorder=4)
+    span = max(float(np.abs(pct).max()), 1.0)
+    pad = span * 0.14
+    for xi, v in zip(x, pct):
+        # Anything inside a point of the baseline is noise at this sample size;
+        # labelling it would dress up a number the data cannot support.
+        if abs(v) < 1.0:
+            continue
+        ax.text(xi, v + (pad * 0.12 if v > 0 else -pad * 0.12), f"{v:+.1f}%",
+                ha="center", va="bottom" if v > 0 else "top",
+                fontsize=9, color=INK, fontweight="bold", zorder=5)
+    ax.set_ylim(min(pct.min() - pad, -pad), max(pct.max() + pad, pad))
     ax.set_xticks(x)
     ax.set_xticklabels([str(int(c)) for c in t.concurrency])
     ax.set_xlabel("concurrency (requests in flight)")
-    ax.set_ylabel(f"{name} speedup vs baseline")
-    gm = float(np.exp(np.log(sp).mean()))
+    ax.set_ylabel(f"{name} change vs baseline (%)")
+    gm_pct = (float(np.exp(np.log(sp).mean())) - 1.0) * 100.0
     ax.set_title(f"Adding FlyDSL to the Inductor GEMM backends - {short} {dtype}\n"
-                 f"{name} ({phase}): geomean {gm:.3f}x, "
+                 f"{name} ({phase}): geomean {gm_pct:+.1f}%, "
                  f"{int((sp > 1).sum())}/{len(sp)} points faster",
                  fontsize=11, loc="left")
     style(ax)
 
-    nmin, nmax = int(t.n.min()), int(t.n.max())
-    reps = f"{nmin}" if nmin == nmax else f"{nmin}-{nmax}"
     nfail = int(t.n_failed.sum()) if "n_failed" in t else 0
-    foot = (
-        f"Baseline: {ctx['backends'][0]}   |   Treatment: {ctx['backends'][1]}   |   "
-        f"torch.compile, max-autotune (search space {ctx['search_space']}, "
-        f"origami={ctx['origami']}/top{ctx['origami_topk']})\n"
-        f"vllm bench serve, {model}, {dtype}, TP={ctx['tp']}, "
-        f"ISL={int(t.isl.iloc[0])} / OSL={int(t.osl.iloc[0])}, "
-        f"max_num_batched_tokens={ctx['chunk']}, prefix caching off, ignore_eos\n"
-        f"{name} = {unit}; mean of {reps} repeat(s) per point"
-        + (f"; {nfail} failed point(s) excluded" if nfail else "")
-        + "; higher is better, 1.0 = baseline"
-    )
+    foot = workload_footnote(
+        t, ctx, arms,
+        extra=(f"; {nfail} failed point(s) excluded" if nfail else "")
+              + f"; {name} = {unit}; bars above zero are faster than the baseline; "
+                "changes within 1% are left unlabelled")
     fig.text(0.008, -0.055, foot, ha="left", va="top",
              fontsize=7.5, color=MUTED, linespacing=1.6)
-    save(fig, out, f"speedup_{metric}_{short}_{dtype}_{prof}",
+    save(fig, out, fname(short, dtype, t, name) + "_speedup",
          {"model": model, "dtype": dtype, "profile": prof, "metric": metric,
-          "geomean": gm, "wins": int((sp > 1).sum()), "points": len(sp)})
+          "geomean": float(np.exp(np.log(sp).mean())), "geomean_pct": gm_pct, "wins": int((sp > 1).sum()), "points": len(sp)})
 
 
-def absolute_lines(d, out, model, dtype, prof, metric, arms):
+def workload_footnote(d, ctx, arms, extra=""):
+    """The workload line that every figure carries.
+
+    A speedup without its workload is not a result: the batch width, the prefill
+    chunk width and the search space each move the number more than the kernel
+    under test does.
+    """
+    t = d.iloc[0]
+    return (
+        f"Baseline: {arms[0]} = {ctx['backends'][0]}   |   "
+        f"Treatment: {arms[1]} = {ctx['backends'][1]}   |   "
+        f"torch.compile max-autotune, "
+        f"origami={ctx['origami']}/top{ctx['origami_topk']}\n"
+        f"vllm bench serve, TP={ctx['tp']}, ISL={int(t.isl)} / OSL={int(t.osl)}, "
+        f"max_num_batched_tokens={ctx['chunk']}, "
+        f"prefix caching off, ignore_eos, seed 0\n"
+        + extra.lstrip("; ")
+    )
+
+
+def absolute_lines(d, out, model, dtype, prof, metric, arms, ctx):
     """Absolute values per arm; a ratio alone hides whether both arms are slow."""
     name, unit, _ = METRIC_LABEL.get(metric, (metric, "", ""))
     short = model.split("/")[-1]
@@ -128,7 +162,9 @@ def absolute_lines(d, out, model, dtype, prof, metric, arms):
     ax.set_title(f"{name} - {short} {dtype}, {prof} profile", fontsize=10.5, loc="left")
     ax.legend(fontsize=8)
     style(ax)
-    save(fig, out, f"absolute_{metric}_{short}_{dtype}_{prof}",
+    fig.text(0.008, -0.055, workload_footnote(d, ctx, arms),
+             ha="left", va="top", fontsize=7.5, color=MUTED, linespacing=1.6)
+    save(fig, out, fname(short, dtype, d, name),
          {"model": model, "dtype": dtype, "profile": prof, "metric": metric})
 
 
@@ -136,7 +172,8 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--run-dir", required=True)
     ap.add_argument("--out-dir", default=None)
-    ap.add_argument("--metrics", default="mean_tpot_ms,mean_ttft_ms,output_throughput")
+    ap.add_argument("--metrics",
+                default="mean_tpot_ms,mean_ttft_ms,mean_e2el_ms,output_throughput")
     ap.add_argument("--arms", default="baseline,treatment")
     a = ap.parse_args()
     run = pathlib.Path(a.run_dir)
@@ -171,11 +208,22 @@ def main():
         g = g.merge(raw[key + ["isl", "osl"]].drop_duplicates(key), on=key, how="left")
 
     print(f"figures -> {out}")
+    order = sorted(g.model_id.unique())
     for (model, dtype, prof), d in g.groupby(["model_id", "dtype", "profile"]):
+        mcolor = MODEL_COLORS[order.index(model) % len(MODEL_COLORS)]
         for m in a.metrics.split(","):
+            # A short prompt makes TTFT a measure of scheduling overhead rather
+            # than of prefill GEMM time; plotting it invites a prefill reading
+            # the data cannot support.
+            # Prefill is ISL x concurrency tokens wide, not ISL: a short ISL
+            # still exercises prefill once enough requests are in flight.
+            prefill_max = int(d.isl.iloc[0]) * int(d.concurrency.max())
+            if m == "mean_ttft_ms" and prefill_max < 512:
+                print(f"  skip TTFT: widest prefill is {prefill_max} tokens")
+                continue
             if f"{m}_speedup" in d.columns:
-                speedup_bars(d, out, model, dtype, prof, m, arms, ctx)
-                absolute_lines(d, out, model, dtype, prof, m, arms)
+                speedup_bars(d, out, model, dtype, prof, m, arms, ctx, mcolor)
+                absolute_lines(d, out, model, dtype, prof, m, arms, ctx)
     print("done")
 
 

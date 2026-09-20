@@ -65,20 +65,26 @@ if [ -n "$pid" ] && cexec "kill -0 $pid 2>/dev/null"; then
     fi
 fi
 
-# Leftover sweep, restricted to this project's own paths: a pattern like "vllm"
-# or "python" would hit unrelated jobs. Source checkouts sit next to the repo.
+# Leftover sweep, off by default. The targeted process-group kill above already
+# covers everything this daemon started; a pattern sweep additionally matches
+# shards launched by hand or by a second sweep running in parallel, and killing
+# those destroys work this script never owned. Set E2E_STOP_SWEEP=1 to opt in.
+if [ "${E2E_STOP_SWEEP:-0}" != "1" ]; then
+    echo "-> skipping leftover sweep (set E2E_STOP_SWEEP=1 to force)"
+    exit 0
+fi
 PROJ_DIR="$(dirname "$CROOT")"
 SWEEP_PAT="$CROOT|$PROJ_DIR/$(basename "$E2E_TORCH_SRC")|$PROJ_DIR/$(basename "$E2E_VLLM_SRC")"
-SWEEP_PAT="$SWEEP_PAT|supervisor.sh|bootstrap.sh|run_all.sh"
+SWEEP_PAT="$SWEEP_PAT|run_all.sh|run_e2e.sh|run_sharded.sh"
 echo "-> sweeping for leftovers matching $SWEEP_PAT"
 cexec "
-  for p in \$(pgrep -f '$SWEEP_PAT' 2>/dev/null); do
+  for p in \$(pgrep -u "$(id -u)" -f '$SWEEP_PAT' 2>/dev/null); do
      [ \"\$p\" = \"\$\$\" ] && continue
      echo \"   kill \$p : \$(ps -o args= -p \$p 2>/dev/null | cut -c1-100)\"
      kill -TERM \$p 2>/dev/null
   done
   sleep 5
-  for p in \$(pgrep -f '$SWEEP_PAT' 2>/dev/null); do
+  for p in \$(pgrep -u "$(id -u)" -f '$SWEEP_PAT' 2>/dev/null); do
      [ \"\$p\" = \"\$\$\" ] && continue
      kill -KILL \$p 2>/dev/null
   done

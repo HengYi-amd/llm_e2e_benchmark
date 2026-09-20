@@ -19,7 +19,9 @@ export E2E_VENV="${E2E_VENV:-$E2E_ROOT/.venv-e2e}"
 # Everything a run writes stays inside the repo except TMPDIR, which must be on
 # a local filesystem: compile workers do heavy small-file I/O and a network
 # home directory makes compilation crawl. stop.sh removes it.
-export E2E_ARTIFACTS="${E2E_ARTIFACTS:-$E2E_ROOT/artifacts}"
+export E2E_ARTIFACTS="${E2E_ARTIFACTS:-$E2E_ROOT/runs}"
+# Deliverables: one flat directory per (model, dtype).
+export E2E_RESULT="${E2E_RESULT:-$E2E_ROOT/result}"
 export TMPDIR="${E2E_TMPDIR:-/var/tmp/llm_e2e_bench}"
 
 # Weights kept inside the repo so a run is self-contained; a shared cache can
@@ -35,7 +37,7 @@ export TRITON_CACHE_DIR="${TRITON_CACHE_DIR:-$E2E_ROOT/caches/triton/${ARM_TAG:-
 export VLLM_CACHE_ROOT="${VLLM_CACHE_ROOT:-$E2E_ROOT/caches/vllm/${ARM_TAG:-default}}"
 export FLYDSL_RUNTIME_CACHE_DIR="${FLYDSL_RUNTIME_CACHE_DIR:-$E2E_ROOT/caches/flydsl/${ARM_TAG:-default}}"
 
-mkdir -p "$TMPDIR" "$E2E_ARTIFACTS" "$E2E_ROOT/logs" "$E2E_ROOT/state" \
+mkdir -p "$TMPDIR" "$E2E_ARTIFACTS" "$E2E_RESULT" "$E2E_ROOT/logs" "$E2E_ROOT/state" \
          "$TRITON_CACHE_DIR" "$TORCHINDUCTOR_CACHE_DIR" \
          "$FLYDSL_RUNTIME_CACHE_DIR" "$VLLM_CACHE_ROOT" 2>/dev/null || true
 
@@ -43,10 +45,22 @@ mkdir -p "$TMPDIR" "$E2E_ARTIFACTS" "$E2E_ROOT/logs" "$E2E_ROOT/state" \
 # package of the same name, and the failure surfaces as a model-loading error.
 export PYTHONSAFEPATH=1
 
-# Config: file first, environment wins.
+# Config: file first, environment wins. Exported, because the provenance each
+# result carries is read from the environment by child processes; unexported,
+# every result would record an empty configuration.
 # shellcheck disable=SC1091
-[ -f "$E2E_ROOT/config/default.env" ] && . "$E2E_ROOT/config/default.env"
+if [ -f "$E2E_ROOT/config/default.env" ]; then
+    set -a
+    . "$E2E_ROOT/config/default.env"
+    set +a
+fi
 
-# KV capacity pin produced by scripts/bench/calibrate_kv.sh.
+# KV capacity pin produced by scripts/bench/calibrate_kv.sh. Written as an if
+# rather than a `&&` list: a trailing test that fails makes sourcing this file
+# return non-zero, which silently aborts any caller running under `set -e`.
 # shellcheck disable=SC1091
-[ -f "$E2E_ROOT/state/kv_pin.env" ] && . "$E2E_ROOT/state/kv_pin.env"
+for _kv in "$E2E_ROOT"/state/kv_pin.d/*.env; do
+    [ -f "$_kv" ] && . "$_kv"
+done
+unset _kv
+:
