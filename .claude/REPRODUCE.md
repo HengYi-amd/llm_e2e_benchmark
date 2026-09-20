@@ -19,10 +19,29 @@ latency and output throughput.
 | Qwen3-32B | 1.0178x | 1.0269x | 1.0184x | 1.0183x |
 | Llama-3.3-70B-Instruct | 1.0045x | 1.0081x | 1.0048x | 1.0047x |
 
-Treat a reproduction as successful if Qwen's TPOT geomean lands in 1.01–1.03x and
-Llama's in 0.99–1.02x. Do **not** treat an exact match as the bar: the measured
-repeat spread is ~1.2% median, so the geomean itself carries roughly that much
-uncertainty.
+**Those two numbers are not yet publishable, and reproducing them is not the
+goal.** The published batch was assembled from three collection sessions and
+carries four defects a single clean run avoids:
+
+- 8 of its 12 cells are single measurements — all six Qwen cells, plus Llama
+  c=16 and c=64.
+- Three cells (Qwen c=128, Qwen c=256, Llama c=64) ran Triton's **exhaustive**
+  candidate space in the baseline arm and the **default** space in the treatment
+  arm, so those are not a backend-only A/B. Server logs show 5160 Triton
+  candidates against 36.
+- Llama's baseline changes along the concurrency axis (exhaustive at c=16 and
+  c=64, default elsewhere), so the *shape* of its curve mixes two baselines.
+- In 8 of 16 arm pairs the two arms were collected 4.6 to 27.2 hours apart
+  rather than back to back, because resume logic skipped an already-present
+  baseline during a later manual top-up.
+
+On the only four cells that do have repeats, the arm difference is
+indistinguishable from zero: effect +0.36%, pooled within-run sd 0.91% in log
+space, exact permutation test p = 0.50.
+
+So: run the full matrix in **one batch** with `E2E_REPEATS=3`, and judge the
+result by whether the checks in section 4 pass — not by whether it matches
+1.0178x.
 
 ---
 
