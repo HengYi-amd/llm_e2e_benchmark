@@ -11,9 +11,14 @@ identical, so any difference is attributable to that change.
 The harness is backend-, model- and dtype-agnostic. The shipped defaults target
 the FlyDSL backend at bf16; see [Extending it](#extending-it).
 
-For the exact parameters of the published run, and why each was chosen, see
-[RUN_Recipe.md](RUN_Recipe.md). For a self-contained reproduction procedure,
-see [.claude/REPRODUCE.md](.claude/REPRODUCE.md).
+For the exact parameters of the published bf16 run, and why each was chosen, see
+[RUN_Recipe_bf16.md](RUN_Recipe_bf16.md). The mxfp8/mxfp4 plan, including the
+blockers that have to be cleared before that run is meaningful, is in
+[RUN_Recipe_mxfp.md](RUN_Recipe_mxfp.md). For a self-contained reproduction
+procedure, see [.claude/REPRODUCE.md](.claude/REPRODUCE.md).
+
+Deliverables live in one tree per numeric format — `bf16_result/`,
+`mxfp8_result/`, `mxfp4_result/` — selected by `E2E_RESULT_ROOT`.
 
 ---
 

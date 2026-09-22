@@ -20,7 +20,7 @@ PORT="${BENCH_PORT:-$((8400 + GPU))}"
 export HIP_VISIBLE_DEVICES="$GPU"
 unset ROCR_VISIBLE_DEVICES
 OUT="$E2E_ROOT/logs/kv_calib/$(echo "${KV_CALIB_MODEL:-default}" | tr -c 'A-Za-z0-9' '_')"
-mkdir -p "$OUT" "$E2E_ROOT/state/kv_pin.d"
+mkdir -p "$OUT" "$E2E_KV_PIN_DIR"
 
 MODEL="${KV_CALIB_MODEL:-$(echo "$E2E_MODELS" | awk '{print $1}')}"
 # Shell-safe suffix for the per-model variable name.
@@ -103,7 +103,7 @@ for arm in $E2E_ARMS; do
     echo "[kvcal]   $arm: $t bytes"
 done
 
-python - "$OUT/summary.json" "$E2E_ROOT/state/kv_pin.d/$MODEL_KEY.env" "$MODEL_KEY" "${TOK[@]}" <<'PY'
+python - "$OUT/summary.json" "$E2E_KV_PIN_DIR/$MODEL_KEY.env" "$MODEL_KEY" "${TOK[@]}" <<'PY'
 import json, os, sys
 out_json, out_env, model_key = sys.argv[1], sys.argv[2], sys.argv[3]
 vals = [int(x) for x in sys.argv[4:]]

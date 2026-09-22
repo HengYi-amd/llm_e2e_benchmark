@@ -14,9 +14,9 @@ read -r -a GPUS <<< "${E2E_GPUS:-0 1 2 3 4 5 6 7}"
 # would silently drop pins for models not in this invocation, and a later run of
 # one of those would recalibrate to a different capacity - making its numbers
 # incomparable with data already collected under the old pin.
-mkdir -p "$E2E_ROOT/state/kv_pin.d"
+mkdir -p "$E2E_KV_PIN_DIR"
 for _m in $E2E_MODELS; do
-    rm -f "$E2E_ROOT/state/kv_pin.d/$(echo "$_m" | tr -c 'A-Za-z0-9' '_').env"
+    rm -f "$E2E_KV_PIN_DIR/$(echo "$_m" | tr -c 'A-Za-z0-9' '_').env"
 done
 unset _m
 
@@ -34,5 +34,5 @@ done
 rc=0
 for p in "${pids[@]}"; do wait "$p" || rc=1; done
 echo "[kvcal-all] done rc=$rc"
-cat "$E2E_ROOT"/state/kv_pin.d/*.env 2>/dev/null || true
+cat "$E2E_KV_PIN_DIR"/*.env 2>/dev/null || true
 exit "$rc"

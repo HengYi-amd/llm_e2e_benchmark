@@ -1,7 +1,9 @@
 # Results, caches and weights stay out of the repository. The repo is the
 # method; the numbers belong to a particular machine and a particular run.
 runs/
-result/
+bf16_result/
+mxfp8_result/
+mxfp4_result/
 caches/
 models/
 logs/
@@ -22,3 +24,7 @@ patches/layers_utils.orig.py
 
 # NFS leaves these behind when a deleted file is still open
 .nfs*
+
+# Local safety copy of the stock torch files before an experimental overlay.
+# Vendored upstream source; belongs on the machine, not in this repo.
+patches/torch_bf16_backup/
